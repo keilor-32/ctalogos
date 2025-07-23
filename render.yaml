@@ -11,7 +11,7 @@ services:
       - key: PROVIDER_TOKEN
         value: ""
       - key: APP_URL
-        value: "https://telegram-bot-udyat.onrender.com"
+        value: "https://botprueba-u6qb.onrender.com"
       - key: GOOGLE_APPLICATION_CREDENTIALS_JSON
         sync: false  
           
