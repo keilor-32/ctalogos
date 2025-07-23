@@ -4,7 +4,6 @@ import tempfile
 import logging
 import asyncio
 from datetime import datetime, timedelta, timezone
-# REMOVED: from aiohttp import web  <--- THIS LINE IS REMOVED
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -736,25 +735,27 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
         user_premium[user_id] = {"expire_at": expire_at, "plan_type": "plan_ultra"}
         await update.message.reply_text("🎉 ¡Gracias por tu compra! Tu *Plan Ultra* se activó por 30 días.")
     # Si tienes un 'PREMIUM_ITEM' original, asegúrate de manejarlo
-    save_data() # Save data after successful payment
+    save_data() # Guardar datos después de un pago exitoso
 
-# New functions to handle application lifecycle
+# Nuevas funciones para manejar el ciclo de vida de la aplicación de PTB
 async def post_init(application: Application):
-    """Callback function to run after the bot is started and before it receives updates."""
+    """Función de callback que se ejecuta después de que el bot se inicia y antes de recibir actualizaciones."""
     load_data()
     logger.info("Datos cargados al inicio.")
-    # Set webhook here AFTER data is loaded
+    # Configura el webhook aquí, DESPUÉS de que los datos se hayan cargado
     await application.bot.set_webhook(url=f"{APP_URL}/telegram", allowed_updates=Update.ALL_TYPES)
     logger.info(f"Webhook configurado a: {APP_URL}/telegram")
 
 async def pre_shutdown(application: Application):
-    """Callback function to run before the bot is shut down."""
+    """Función de callback que se ejecuta antes de que el bot se apague."""
+    # Nota: En ptb v20, el método para registrar esto en ApplicationBuilder es `post_shutdown`.
+    # Sin embargo, tu función interna `pre_shutdown` se llamará en ese punto.
     save_data()
     logger.info("Datos guardados al cerrar.")
 
 def main():
-    # Register post_init and pre_shutdown here
-    application = Application.builder().token(TOKEN).post_init(post_init).pre_shutdown(pre_shutdown).build()
+    # Registra las funciones post_init y pre_shutdown al construir la aplicación
+    application = Application.builder().token(TOKEN).post_init(post_init).post_shutdown(pre_shutdown).build() # <-- CORREGIDO AQUÍ
 
     # Handlers
     application.add_handler(CommandHandler("start", start))
@@ -762,14 +763,14 @@ def main():
     application.add_handler(PreCheckoutQueryHandler(precheckout_handler))
     application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
 
-    # Start the bot in webhook mode with the integrated server
+    # Iniciar el bot en modo webhook con el servidor integrado de python-telegram-bot
     if APP_URL:
-        # The library handles starting the web server on the specified port and path
+        # La librería se encarga de iniciar el servidor web en el puerto y ruta especificados
         application.run_webhook(
             listen="0.0.0.0",
             port=PORT,
-            url_path="telegram", # The final part of the webhook URL (e.g., /telegram)
-            webhook_url=f"{APP_URL}/telegram" # The complete URL that Telegram will call
+            url_path="telegram", # La parte final de la URL del webhook (ej: /telegram)
+            webhook_url=f"{APP_URL}/telegram" # La URL completa que Telegram llamará
         )
     else:
         print("❌ APP_URL no configurada. Ejecutando en modo polling (solo para desarrollo).")
