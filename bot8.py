@@ -4,7 +4,7 @@ import tempfile
 import logging
 import asyncio
 from datetime import datetime, timedelta, timezone
-from aiohttp import web
+# REMOVED: from aiohttp import web  <--- THIS LINE IS REMOVED
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -45,8 +45,8 @@ print("✅ Firestore inicializado correctamente.")
 # --- Configuración ---
 TOKEN = os.getenv("TOKEN")
 PROVIDER_TOKEN = os.getenv("PROVIDER_TOKEN", "")
-APP_URL = os.getenv("APP_URL")
-PORT = int(os.getenv("PORT", "8080"))
+APP_URL = os.getenv("APP_URL") # This is now the base URL for the webhook
+PORT = int(os.getenv("PORT", "8080")) # Port on which the PTB server will listen
 
 if not TOKEN:
     raise ValueError("❌ ERROR: La variable de entorno TOKEN no está configurada.")
@@ -275,14 +275,11 @@ def get_main_menu():
     )
 
 # --- Función auxiliar para generar botones de capítulos en cuadrícula ---
-# MODIFICADO: Ahora los botones de capítulo usan deep links del bot
-async def generate_chapter_buttons(serie_id, num_chapters, bot_username, chapters_per_row=5):
+def generate_chapter_buttons(serie_id, num_chapters, chapters_per_row=5):
     buttons = []
     row = []
     for i in range(num_chapters):
-        # Cada botón de capítulo ahora es una URL a un deep link del bot
-        chapter_deep_link = f"https://t.me/{bot_username}?start=cap_{serie_id}_{i}"
-        row.append(InlineKeyboardButton(str(i + 1), url=chapter_deep_link))
+        row.append(InlineKeyboardButton(str(i + 1), callback_data=f"cap_{serie_id}_{i}"))
         if len(row) == chapters_per_row:
             buttons.append(row)
             row = []
@@ -297,7 +294,7 @@ async def generate_chapter_buttons(serie_id, num_chapters, bot_username, chapter
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     user_id = update.effective_user.id
-    bot_username = (await context.bot.get_me()).username # Obtener el nombre de usuario del bot
+    bot_username = (await context.bot.get_me()).username
 
     # Manejo del start link para mostrar sinopsis + botón "Ver Video" (Videos individuales)
     if args and args[0].startswith("video_"):
@@ -336,37 +333,33 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("❌ Error al verificar canales. Intenta más tarde.")
                 return
 
-        # MODIFICADO: El botón "Ver Video" ahora es un deep link del bot
-        video_deep_link = f"https://t.me/{bot_username}?start=play_video_{pkg_id}"
-        
+        # Mostrar sinopsis y botón "Ver Video"
         ver_video_button = InlineKeyboardMarkup(
             [
                 [
                     InlineKeyboardButton(
-                        video_deep_link, # El texto del botón es la URL
-                        url=video_deep_link # La URL del botón es la misma
+                        "▶️ Ver Video", callback_data=f"play_video_{pkg_id}" # Callback para cargar el video
                     )
                 ]
             ]
         )
         await update.message.reply_text(
-            f"🎬 **{pkg.get('caption', 'Contenido:')}**\n\n"
-            f"Haz clic en el enlace de abajo para ver el video en el bot:",
+            f"🎬 **{pkg.get('caption', 'Contenido:')}**\n\nPresiona 'Ver Video' para iniciar la reproducción.",
             reply_markup=ver_video_button,
             parse_mode="Markdown"
         )
         return
 
-    # NUEVO: Manejo del start link para REPRODUCIR video (activado por el deep link del botón)
+    # Manejo del start link para reproducir video (Videos individuales)
     elif args and args[0].startswith("play_video_"):
-        pkg_id = args[0].split("_")[2] # Extrae el pkg_id
+        pkg_id = args[0].split("_")[2]
         pkg = content_packages.get(pkg_id)
         if not pkg or "video_id" not in pkg:
             await update.message.reply_text("❌ Video no disponible.")
             return
 
         # La verificación de canales ya se hizo en el paso 'video_' anterior,
-        # pero si el usuario llega directamente aquí, se repite la verificación.
+        # pero para mayor seguridad o si el usuario llegó directamente aquí, se puede repetir.
         for name, username in CHANNELS.items():
             try:
                 member = await context.bot.get_chat_member(chat_id=username, user_id=user_id)
@@ -411,9 +404,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-    # MODIFICADO: Manejo del start link para series (mostrar capítulos o enviar capítulo directo)
+    # Modificado: Manejo de argumentos para series (directo a capítulos)
     elif args and args[0].startswith("serie_"):
-        serie_id = args[0].split("_", 1)[1] # Extrae el ID de la serie
+        serie_id = args[0].split("_", 1)[1]
         serie = series_data.get(serie_id)
         if not serie:
             await update.message.reply_text("❌ Serie no encontrada.")
@@ -457,64 +450,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        # Si el argumento tiene el formato 'serie_ID_cap_INDEX', reproduce directamente el capítulo
-        if len(args[0].split('_')) == 4 and args[0].split('_')[2] == 'cap':
-            cap_index = int(args[0].split('_')[3])
-            capitulos = serie.get("capitulos", [])
-            if cap_index < 0 or cap_index >= len(capitulos):
-                await update.message.reply_text("❌ Capítulo no disponible.")
-                return
-            
-            await register_view(user_id) # Registra la vista al reproducir el capítulo
-            video_id = capitulos[cap_index]
-
-            # Botones de navegación para capítulos
-            botones = []
-            if cap_index > 0:
-                prev_deep_link = f"https://t.me/{bot_username}?start=serie_{serie_id}_cap_{cap_index - 1}"
-                botones.append(InlineKeyboardButton("⬅️ Anterior", url=prev_deep_link))
-            if cap_index < len(capitulos) - 1:
-                next_deep_link = f"https://t.me/{bot_username}?start=serie_{serie_id}_cap_{cap_index + 1}"
-                botones.append(InlineKeyboardButton("➡️ Siguiente", url=next_deep_link))
-            
-            # Botón "Volver a la Serie" que regresará a la lista de capítulos (usando deep link)
-            list_deep_link = f"https://t.me/{bot_username}?start=serie_{serie_id}"
-            botones.append(InlineKeyboardButton("🔙 Volver a la Serie", url=list_deep_link))
-
-            markup = InlineKeyboardMarkup([botones])
-
-            await update.message.reply_video(
-                video=video_id,
-                caption=f"📺 {serie['title']} - Capítulo {cap_index+1}",
-                reply_markup=markup,
-                protect_content=not can_resend_content(user_id),
-                parse_mode="Markdown"
-            )
-            return # Termina la ejecución aquí si se reproduce un capítulo
-
-        # Si solo es 'serie_ID', muestra la lista de capítulos (como se hacía antes)
+        # Si puede ver, mostrar capítulos
         capitulos = serie.get("capitulos", [])
         if not capitulos:
             await update.message.reply_text("❌ Esta serie no tiene capítulos disponibles aún.")
             return
         
         # Usar la nueva función para generar los botones de los capítulos
-        markup = await generate_chapter_buttons(serie_id, len(capitulos), bot_username)
+        markup = generate_chapter_buttons(serie_id, len(capitulos))
 
-        # MODIFICADO: El botón para la serie ahora es un deep link del bot
-        serie_deep_link = f"https://t.me/{bot_username}?start=serie_{serie_id}"
         await update.message.reply_photo(
             photo=serie["photo_id"],
-            caption=f"📺 *{serie['title']}*\n\n{serie['caption']}\n\n"
-                    f"Haz clic en el enlace de abajo para ver la serie en el bot:",
-            reply_markup=InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton(serie_deep_link, url=serie_deep_link)
-                    ],
-                    *markup.inline_keyboard # Agrega los botones de los capítulos generados
-                ]
-            ),
+            caption=f"📺 *{serie['title']}*\n\n{serie['caption']}\n\nSelecciona un capítulo:",
+            reply_markup=markup,
             parse_mode="Markdown"
         )
     else:
@@ -530,7 +478,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ]
             ),
         )
-
 
 async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -556,7 +503,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = query.from_user
     user_id = user.id
     data = query.data
-    bot_username = (await context.bot.get_me()).username # Obtener el username del bot aquí también
 
     if data == "planes":
         texto_planes = (
@@ -636,9 +582,142 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "cursos":
         await query.message.reply_text("🎓 Aquí estarán los cursos disponibles.")
 
-    # REMOVIDO: El manejo de play_video_ y cap_ y serie_list_ se ha movido al handler 'start'
-    # ya que ahora los botones generan deep links que usan el comando /start.
-    # Los únicos callbacks que se siguen manejando aquí son los del menú principal y pagos.
+    # Manejo del callback para reproducir el video individual
+    elif data.startswith("play_video_"):
+        pkg_id = data.split("_")[2]
+        pkg = content_packages.get(pkg_id)
+        if not pkg or "video_id" not in pkg:
+            await query.message.reply_text("❌ Video no disponible.")
+            return
+
+        # Verificación de seguridad (similar a 'start' handler)
+        for name, username in CHANNELS.items():
+            try:
+                member = await context.bot.get_chat_member(chat_id=username, user_id=user_id)
+                if member.status not in ["member", "administrator", "creator"]:
+                    await query.message.reply_text(
+                        "🔒 Para ver este contenido debes unirte a los canales.",
+                        reply_markup=InlineKeyboardMarkup(
+                            [
+                                [
+                                    InlineKeyboardButton(
+                                        "🔗 Unirse a canal 1", url=f"https://t.me/{CHANNELS['canal_1'][1:]}"
+                                    )
+                                ],
+                                [
+                                    InlineKeyboardButton(
+                                        "🔗 Unirse a canal 2", url=f"https://t.me/{CHANNELS['canal_2'][1:]}"
+                                    )
+                                ],
+                                [InlineKeyboardButton("✅ Verificar suscripción", callback_data="verify")],
+                            ]
+                        ),
+                    )
+                    return
+            except Exception as e:
+                logger.warning(f"Error verificando canal: {e}")
+                await query.message.reply_text("❌ Error al verificar canales. Intenta más tarde.")
+                return
+
+        if can_view_video(user_id):
+            await register_view(user_id)
+            title_caption = pkg.get("caption", "🎬 Aquí tienes el video completo.")
+            await query.message.reply_video(
+                video=pkg["video_id"],
+                caption=title_caption,
+                protect_content=not can_resend_content(user_id)
+            )
+            await query.message.delete() # Eliminar el mensaje anterior
+        else:
+            await query.answer("🚫 Has alcanzado tu límite diario de videos. Compra un plan para más acceso.", show_alert=True)
+            await query.message.reply_text(
+                f"🚫 Has alcanzado tu límite diario de {FREE_LIMIT_VIDEOS} videos.\n"
+                "💎 Por favor, considera comprar un plan para acceso ilimitado.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💎 Comprar Planes", callback_data="planes")]]),
+            )
+
+    # Mostrar video capítulo con navegación (series)
+    elif data.startswith("cap_"):
+        _, serie_id, index = data.split("_")
+        index = int(index)
+        serie = series_data.get(serie_id)
+        
+        if not serie or "capitulos" not in serie:
+            await query.message.reply_text("❌ Serie o capítulos no disponibles.")
+            return
+
+        capitulos = serie["capitulos"]
+        total = len(capitulos)
+        if index < 0 or index >= total:
+            await query.message.reply_text("❌ Capítulo fuera de rango.")
+            return
+
+        # APLICACIÓN DE LA SEGURIDAD PARA CAPÍTULOS DE SERIES AQUÍ
+        if can_view_video(user_id): # Verifica si tiene vistas disponibles
+            await register_view(user_id) # Registra la vista
+            video_id = capitulos[index]
+
+            botones = []
+            if index > 0:
+                botones.append(InlineKeyboardButton("⬅️ Anterior", callback_data=f"cap_{serie_id}_{index - 1}"))
+            if index < total - 1:
+                botones.append(InlineKeyboardButton("➡️ Siguiente", callback_data=f"cap_{serie_id}_{index + 1}"))
+            
+            # Botón "Volver a la Serie" que regresará a la lista de capítulos
+            botones.append(InlineKeyboardButton("🔙 Volver a la Serie", callback_data=f"serie_list_{serie_id}")) # Nuevo callback para listar capítulos
+
+            markup = InlineKeyboardMarkup([botones])
+
+            await query.edit_message_media(
+                media=InputMediaVideo(
+                    media=video_id,
+                    caption=f"{serie['title']} - Capítulo {index+1}",
+                    parse_mode="Markdown"
+                ),
+                reply_markup=markup,
+            )
+        else:
+            await query.answer("🚫 Has alcanzado tu límite diario de videos. Compra un plan para más acceso.", show_alert=True)
+            await query.message.reply_text(
+                f"🚫 Has alcanzado tu límite diario de {FREE_LIMIT_VIDEOS} videos.\n"
+                "💎 Por favor, considera comprar un plan para acceso ilimitado.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💎 Comprar Planes", callback_data="planes")]]),
+            )
+    
+    # Nuevo callback para mostrar la lista de capítulos de una serie
+    elif data.startswith("serie_list_"):
+        serie_id = data.split("_")[2]
+        serie = series_data.get(serie_id)
+        if not serie:
+            await query.message.reply_text("❌ Serie no encontrada.")
+            return
+        
+        # APLICACIÓN DE LA SEGURIDAD PARA SERIES AQUÍ (al volver a la lista)
+        if not can_view_video(user_id): # Verifica si tiene vistas disponibles
+            await query.message.reply_text(
+                f"🚫 Has alcanzado tu límite diario de {FREE_LIMIT_VIDEOS} vistas para series/videos.\n"
+                "💎 Por favor, considera comprar un plan para acceso ilimitado.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💎 Comprar Planes", callback_data="planes")]]),
+            )
+            return
+
+        capitulos = serie.get("capitulos", [])
+        if not capitulos:
+            await query.message.reply_text("❌ Esta serie no tiene capítulos disponibles aún.")
+            return
+        
+        # Reutilizar la función para generar los botones de los capítulos
+        markup = generate_chapter_buttons(serie_id, len(capitulos))
+
+        await query.edit_message_media(
+            media=InputMediaPhoto(
+                media=serie["photo_id"],
+                caption=f"📺 *{serie['title']}*\n\n{serie['caption']}\n\nSelecciona un capítulo:",
+                parse_mode="Markdown"
+            ),
+            reply_markup=markup,
+        )
+
 
 # --- Pagos ---
 async def precheckout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -656,29 +735,26 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
         expire_at = datetime.now(timezone.utc) + timedelta(days=30)
         user_premium[user_id] = {"expire_at": expire_at, "plan_type": "plan_ultra"}
         await update.message.reply_text("🎉 ¡Gracias por tu compra! Tu *Plan Ultra* se activó por 30 días.")
-    save_data() # Guardar los cambios después de la activación del plan
+    # Si tienes un 'PREMIUM_ITEM' original, asegúrate de manejarlo
+    save_data() # Save data after successful payment
 
-# --- Webhook ---
-async def webhook_handler(request):
-    update = web.json_response(await request.json())
-    dp = request.app["dp"]
-    async with dp.bot.get_updates_context_manager(update):
-        await dp.process_update(Update.de_json(update, dp.bot))
-    return web.Response()
-
-async def setup_webhook(app: Application):
-    await app.bot.set_webhook(url=f"{APP_URL}/telegram")
-
-async def on_startup(app: Application):
+# New functions to handle application lifecycle
+async def post_init(application: Application):
+    """Callback function to run after the bot is started and before it receives updates."""
     load_data()
     logger.info("Datos cargados al inicio.")
+    # Set webhook here AFTER data is loaded
+    await application.bot.set_webhook(url=f"{APP_URL}/telegram", allowed_updates=Update.ALL_TYPES)
+    logger.info(f"Webhook configurado a: {APP_URL}/telegram")
 
-async def on_shutdown(app: Application):
+async def pre_shutdown(application: Application):
+    """Callback function to run before the bot is shut down."""
     save_data()
     logger.info("Datos guardados al cerrar.")
 
 def main():
-    application = Application.builder().token(TOKEN).build()
+    # Register post_init and pre_shutdown here
+    application = Application.builder().token(TOKEN).post_init(post_init).pre_shutdown(pre_shutdown).build()
 
     # Handlers
     application.add_handler(CommandHandler("start", start))
@@ -686,21 +762,16 @@ def main():
     application.add_handler(PreCheckoutQueryHandler(precheckout_handler))
     application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
 
-    # Iniciar el bot en modo webhook
+    # Start the bot in webhook mode with the integrated server
     if APP_URL:
-        application.updater = None # Deshabilitar polling si usamos webhook
-        app_aiohttp = web.Application()
-        app_aiohttp["dp"] = application.dispatcher
-        app_aiohttp.router.add_post("/telegram", webhook_handler)
-        
-        # Registrar funciones de inicio y cierre de AIOHTTP
-        application.add_startup_hook(on_startup)
-        application.add_shutdown_hook(on_shutdown)
-        application.add_startup_hook(setup_webhook)
-        
-        web.run_app(app_aiohttp, host="0.0.0.0", port=PORT)
+        # The library handles starting the web server on the specified port and path
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            url_path="telegram", # The final part of the webhook URL (e.g., /telegram)
+            webhook_url=f"{APP_URL}/telegram" # The complete URL that Telegram will call
+        )
     else:
-        # Modo polling para desarrollo local (sin APP_URL)
         print("❌ APP_URL no configurada. Ejecutando en modo polling (solo para desarrollo).")
         application.run_polling(drop_pending_updates=True)
 
