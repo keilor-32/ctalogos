@@ -4,7 +4,7 @@ services:
     env: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: python bot.py
+    startCommand: python bot8.py
     envVars:
       - key: TOKEN
         value: "7644340004:AAFWXO7fKl18ky221lUCXCg3GRx_LNs8oQU"
