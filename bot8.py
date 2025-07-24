@@ -798,7 +798,7 @@ async def recibir_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 photo=photo_id,
                 caption=full_caption,
                 parse_mode="Markdown",
-                protect_content=True,
+                protect_content=False, # MODIFICADO: Cambiado a False
             )
         except Exception as e:
             logger.warning(f"No se pudo enviar a {chat_id}: {e}")
@@ -893,7 +893,7 @@ async def finalizar_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 photo=serie["photo_id"],
                 caption=full_caption,
                 parse_mode="Markdown",
-                protect_content=True,
+                protect_content=False, # MODIFICADO: Cambiado a False
             )
         except Exception as e:
             logger.warning(f"No se pudo enviar serie a {chat_id}: {e}")
@@ -975,3 +975,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+ 
