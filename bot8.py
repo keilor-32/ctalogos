@@ -781,9 +781,15 @@ async def recibir_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     save_data()
 
-    # MODIFICACIÓN AQUÍ para enviar la URL directamente en el caption
     direct_url = f"https://t.me/{bot_username}?start=video_{pkg_id}"
-    full_caption = f"{caption}\n\n🎬 *Ver Contenido:*\n`{direct_url}`" # Formato para URL copiable
+    
+    # Formato mejorado para clicable y copiable
+    full_caption = (
+        f"{caption}\n\n"
+        f"🎬 *Ver Contenido:*\n"
+        f"➡️ [Abrir en el Bot]({direct_url})\n" # Enlace clicable
+        f"`{direct_url}`" # URL copiable
+    )
 
     for chat_id in known_chats:
         try:
@@ -791,13 +797,13 @@ async def recibir_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat_id=chat_id,
                 photo=photo_id,
                 caption=full_caption,
-                parse_mode="Markdown", # Necesario para el formato de URL copiable
-                protect_content=True, # Siempre protege en el grupo
+                parse_mode="Markdown",
+                protect_content=True,
             )
         except Exception as e:
             logger.warning(f"No se pudo enviar a {chat_id}: {e}")
 
-    await msg.reply_text("✅ Contenido enviado a los grupos con URL directa.")
+    await msg.reply_text("✅ Contenido enviado a los grupos con URL directa (clicable y copiable).")
 
 # --- Comandos para series (simplificado) ---
 async def crear_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -869,10 +875,16 @@ async def finalizar_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_data()
     del current_series[user_id]
 
-    # MODIFICACIÓN AQUÍ para enviar la URL directamente en el caption
     bot_username = (await context.bot.get_me()).username
     direct_url = f"https://t.me/{bot_username}?start=serie_{serie_id}"
-    full_caption = f"{serie['caption']}\n\n🎬 *Ver Serie Completa:*\n`{direct_url}`" # Formato para URL copiable
+    
+    # Formato mejorado para clicable y copiable
+    full_caption = (
+        f"{serie['caption']}\n\n"
+        f"🎬 *Ver Serie Completa:*\n"
+        f"➡️ [Abrir en el Bot]({direct_url})\n" # Enlace clicable
+        f"`{direct_url}`" # URL copiable
+    )
 
     for chat_id in known_chats:
         try:
@@ -880,13 +892,13 @@ async def finalizar_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat_id=chat_id,
                 photo=serie["photo_id"],
                 caption=full_caption,
-                parse_mode="Markdown", # Necesario para el formato de URL copiable
-                protect_content=True, # Siempre protege la publicación en el grupo
+                parse_mode="Markdown",
+                protect_content=True,
             )
         except Exception as e:
             logger.warning(f"No se pudo enviar serie a {chat_id}: {e}")
 
-    await update.message.reply_text("✅ Serie guardada y enviada a los grupos con URL directa.")
+    await update.message.reply_text("✅ Serie guardada y enviada a los grupos con URL directa (clicable y copiable).")
 
 async def detectar_grupo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
