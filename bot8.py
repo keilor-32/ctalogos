@@ -964,7 +964,7 @@ app_telegram.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_p
 app_telegram.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, recibir_foto))
 app_telegram.add_handler(MessageHandler(filters.VIDEO & filters.ChatType.PRIVATE, recibir_video_serie))
 # MODIFICADO: Usar la función detectar_chat para todos los tipos de chat
-app_telegram.add_handler(MessageHandler(filters.ALL & (filters.ChatType.GROUPS | filters.ChatType.CHANNELS), detectar_chat))
+app_telegram.add_handler(MessageHandler(filters.ALL & (filters.ChatType.GROUPS | filters.ChatType.CHANNEL), detectar_chat)) # CORREGIDO: CHANNELS a CHANNEL
 app_telegram.add_handler(MessageHandler(filters.FORWARDED & filters.ChatType.PRIVATE, detectar_chat)) # Handle forwarded messages in private chat
 
 # Comandos para series
