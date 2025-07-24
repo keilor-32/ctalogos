@@ -20,7 +20,6 @@ from telegram.ext import (
     MessageHandler,
     ContextTypes,
     PreCheckoutQueryHandler,
-    ChatMemberHandler, # Importa ChatMemberHandler
     filters,
 )
 import firebase_admin
@@ -59,10 +58,11 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # --- Variables en memoria ---
+# MODIFICADO: Ahora user_premium guarda un diccionario {expire_at: datetime, plan_type: str}
 user_premium = {}          # {user_id: {expire_at: datetime, plan_type: str}}
 user_daily_views = {}      # {user_id: {date: count}}
 content_packages = {}      # {pkg_id: {photo_id, caption, video_id}}
-known_chats = set()        # Usaremos esta para guardar los IDs de los chats (canales/grupos)
+known_chats = set()
 current_photo = {}
 series_data = {}           # {serie_id: {"title", "photo_id", "caption", "capitulos": [video_id, ...], ...}}
 current_series = {}        # {user_id: {"title", "photo_id", "caption", "serie_id", "capitulos": []}}
@@ -71,19 +71,19 @@ current_series = {}        # {user_id: {"title", "photo_id", "caption", "serie_i
 COLLECTION_USERS = "users_premium"
 COLLECTION_VIDEOS = "videos"
 COLLECTION_VIEWS = "user_daily_views"
-COLLECTION_CHATS = "known_chats" # Colección para guardar IDs de chats
+COLLECTION_CHATS = "known_chats"
 COLLECTION_SERIES = "series_data"
 
 # --- Funciones Firestore (Síncronas) ---
 def save_user_premium_firestore():
     batch = db.batch()
-    for uid, data in user_premium.items():
+    for uid, data in user_premium.items(): # MODIFICADO: 'data' ahora es un dict
         doc_ref = db.collection(COLLECTION_USERS).document(str(uid))
         exp = data["expire_at"]
         if exp.tzinfo is None:
-            batch.set(doc_ref, {"expire_at": exp.replace(tzinfo=timezone.utc).isoformat(), "plan_type": data["plan_type"]})
+            batch.set(doc_ref, {"expire_at": exp.replace(tzinfo=timezone.utc).isoformat(), "plan_type": data["plan_type"]}) # MODIFICADO: Guardar plan_type
         else:
-            batch.set(doc_ref, {"expire_at": exp.isoformat(), "plan_type": data["plan_type"]})
+            batch.set(doc_ref, {"expire_at": exp.isoformat(), "plan_type": data["plan_type"]}) # MODIFICADO: Guardar plan_type
     batch.commit()
 
 def load_user_premium_firestore():
@@ -93,12 +93,12 @@ def load_user_premium_firestore():
         data = doc.to_dict()
         try:
             expire_at_str = data.get("expire_at")
-            plan_type = data.get("plan_type", "premium_legacy")
+            plan_type = data.get("plan_type", "premium_legacy") # MODIFICADO: Cargar plan_type, default para compatibilidad
             if expire_at_str:
                 expire_at = datetime.fromisoformat(expire_at_str)
                 if expire_at.tzinfo is None:
                     expire_at = expire_at.replace(tzinfo=timezone.utc)
-                result[int(doc.id)] = {"expire_at": expire_at, "plan_type": plan_type}
+                result[int(doc.id)] = {"expire_at": expire_at, "plan_type": plan_type} # MODIFICADO: Guardar como dict
         except Exception as e:
             logger.error(f"Error al cargar fecha premium para {doc.id}: {e}")
             pass
@@ -132,14 +132,12 @@ def load_user_daily_views_firestore():
         result[doc.id] = doc.to_dict()
     return result
 
-# MODIFICADO: Función para guardar los IDs de los chats conocidos
 def save_known_chats_firestore():
-    doc_ref = db.collection(COLLECTION_CHATS).document("chats_list") # Un solo documento para la lista
+    doc_ref = db.collection(COLLECTION_CHATS).document("chats")
     doc_ref.set({"chat_ids": list(known_chats)})
 
-# MODIFICADO: Función para cargar los IDs de los chats conocidos
 def load_known_chats_firestore():
-    doc_ref = db.collection(COLLECTION_CHATS).document("chats_list")
+    doc_ref = db.collection(COLLECTION_CHATS).document("chats")
     doc = doc_ref.get()
     if doc.exists:
         data = doc.to_dict()
@@ -165,7 +163,7 @@ def save_data():
     save_user_premium_firestore()
     save_videos_firestore()
     save_user_daily_views_firestore()
-    save_known_chats_firestore() # Asegúrate de llamar a esta función
+    save_known_chats_firestore()
     save_series_firestore()
 
 def load_data():
@@ -173,10 +171,10 @@ def load_data():
     user_premium = load_user_premium_firestore()
     content_packages = load_videos_firestore()
     user_daily_views = load_user_daily_views_firestore()
-    known_chats = load_known_chats_firestore() # Cargar los IDs de chats al inicio
+    known_chats = load_known_chats_firestore()
     series_data = load_series_firestore()
 
-# --- Planes (sin cambios) ---
+# --- Planes ---
 FREE_LIMIT_VIDEOS = 3
 PRO_LIMIT_VIDEOS = 50
 PLAN_PRO_ITEM = {
@@ -194,25 +192,30 @@ PLAN_ULTRA_ITEM = {
     "prices": [LabeledPrice("Plan Ultra por 30 días", 50)],
 }
 
-# --- Control acceso (sin cambios) ---
+# --- Control acceso (MODIFICADO) ---
 def is_premium(user_id):
+    # Verifica si el usuario tiene CUALQUIER plan pago activo.
     if user_id in user_premium:
         user_plan_data = user_premium[user_id]
         if isinstance(user_plan_data, dict) and "expire_at" in user_plan_data:
             return user_plan_data["expire_at"] > datetime.now(timezone.utc)
+        # Compatibilidad con versiones antiguas donde user_premium[user_id] era solo la fecha
         elif isinstance(user_plan_data, datetime):
             return user_plan_data > datetime.now(timezone.utc)
     return False
 
 def get_user_plan_type(user_id):
+    # Obtiene el tipo de plan actual del usuario.
     if is_premium(user_id):
         user_plan_data = user_premium[user_id]
         if isinstance(user_plan_data, dict) and "plan_type" in user_plan_data:
             return user_plan_data["plan_type"]
-        return "plan_ultra"
+        # Compatibilidad: si es premium pero no tiene 'plan_type', asumir "premium_legacy" o "ultra"
+        return "plan_ultra" # Asumir Ultra para planes antiguos sin tipo explícito
     return "free"
 
 def can_resend_content(user_id):
+    # SOLO el plan "ultra" (o "premium_legacy" para compatibilidad) permite reenviar.
     plan_type = get_user_plan_type(user_id)
     return plan_type == "plan_ultra" or plan_type == "premium_legacy"
 
@@ -222,10 +225,10 @@ def can_view_video(user_id):
     current_views = user_daily_views.get(str(user_id), {}).get(today, 0)
 
     if plan_type == "plan_ultra" or plan_type == "premium_legacy":
-        return True
+        return True # Vistas ilimitadas
     elif plan_type == "plan_pro":
         return current_views < PRO_LIMIT_VIDEOS
-    else:
+    else: # plan_type == "free"
         return current_views < FREE_LIMIT_VIDEOS
 
 async def register_view(user_id):
@@ -236,13 +239,13 @@ async def register_view(user_id):
     user_daily_views[uid][today] = user_daily_views[uid].get(today, 0) + 1
     save_data()
 
-# --- Canales para verificación (sin cambios) ---
+# --- Canales para verificación ---
 CHANNELS = {
     "canal_1": "@hsitotv",
     "canal_2": "@Jhonmaxs",
 }
 
-# --- Menú principal (sin cambios) ---
+# --- Menú principal ---
 def get_main_menu():
     return InlineKeyboardMarkup(
         [
@@ -271,27 +274,30 @@ def get_main_menu():
         ]
     )
 
-# --- Función auxiliar para generar botones de capítulos en cuadrícula (sin cambios) ---
+# --- Función auxiliar para generar botones de capítulos en cuadrícula ---
+# MODIFICADO: Ahora los botones de capítulo usan deep links del bot
 async def generate_chapter_buttons(serie_id, num_chapters, bot_username, chapters_per_row=5):
     buttons = []
     row = []
     for i in range(num_chapters):
+        # Cada botón de capítulo ahora es una URL a un deep link del bot
         chapter_deep_link = f"https://t.me/{bot_username}?start=cap_{serie_id}_{i}"
         row.append(InlineKeyboardButton(str(i + 1), url=chapter_deep_link))
         if len(row) == chapters_per_row:
             buttons.append(row)
             row = []
-    if row:
+    if row: # Añadir la última fila si no está completa
         buttons.append(row)
     
+    # Añadir botón "Volver al menú principal" al final
     buttons.append([InlineKeyboardButton("🔙 Volver al menú principal", callback_data="menu_principal")])
     return InlineKeyboardMarkup(buttons)
 
-# --- Handlers (sin cambios significativos, solo refactorizado para la nueva estructura) ---
+# --- Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     user_id = update.effective_user.id
-    bot_username = (await context.bot.get_me()).username
+    bot_username = (await context.bot.get_me()).username # Obtener el nombre de usuario del bot
 
     # Manejo del start link para mostrar sinopsis + botón "Ver Video" (Videos individuales)
     if args and args[0].startswith("video_"):
@@ -301,6 +307,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Contenido no disponible.")
             return
 
+        # Verifica suscripción a canales
         for name, username in CHANNELS.items():
             try:
                 member = await context.bot.get_chat_member(chat_id=username, user_id=user_id)
@@ -309,8 +316,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         "🔒 Para ver este contenido debes unirte a los canales.",
                         reply_markup=InlineKeyboardMarkup(
                             [
-                                [InlineKeyboardButton("🔗 Unirse a canal 1", url=f"https://t.me/{CHANNELS['canal_1'][1:]}")],
-                                [InlineKeyboardButton("🔗 Unirse a canal 2", url=f"https://t.me/{CHANNELS['canal_2'][1:]}")],
+                                [
+                                    InlineKeyboardButton(
+                                        "🔗 Unirse a canal 1", url=f"https://t.me/{CHANNELS['canal_1'][1:]}"
+                                    )
+                                ],
+                                [
+                                    InlineKeyboardButton(
+                                        "🔗 Unirse a canal 2", url=f"https://t.me/{CHANNELS['canal_2'][1:]}"
+                                    )
+                                ],
                                 [InlineKeyboardButton("✅ Verificar suscripción", callback_data="verify")],
                             ]
                         ),
@@ -321,14 +336,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("❌ Error al verificar canales. Intenta más tarde.")
                 return
 
+        # MODIFICADO: El botón "Ver Video" ahora es un deep link del bot
         video_deep_link = f"https://t.me/{bot_username}?start=play_video_{pkg_id}"
         
         ver_video_button = InlineKeyboardMarkup(
             [
                 [
                     InlineKeyboardButton(
-                        video_deep_link,
-                        url=video_deep_link
+                        video_deep_link, # El texto del botón es la URL
+                        url=video_deep_link # La URL del botón es la misma
                     )
                 ]
             ]
@@ -343,12 +359,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # NUEVO: Manejo del start link para REPRODUCIR video (activado por el deep link del botón)
     elif args and args[0].startswith("play_video_"):
-        pkg_id = args[0].split("_")[2]
+        pkg_id = args[0].split("_")[2] # Extrae el pkg_id
         pkg = content_packages.get(pkg_id)
         if not pkg or "video_id" not in pkg:
             await update.message.reply_text("❌ Video no disponible.")
             return
 
+        # La verificación de canales ya se hizo en el paso 'video_' anterior,
+        # pero si el usuario llega directamente aquí, se repite la verificación.
         for name, username in CHANNELS.items():
             try:
                 member = await context.bot.get_chat_member(chat_id=username, user_id=user_id)
@@ -357,8 +375,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         "🔒 saludos debes unirte a todos nuestros canales para asi poder usar este bot una ves te hayas unido debes dar click en verificar suscripcion para con tinuar.",
                         reply_markup=InlineKeyboardMarkup(
                             [
-                                [InlineKeyboardButton("🔗 Unirse a canal 1", url=f"https://t.me/{CHANNELS['canal_1'][1:]}")],
-                                [InlineKeyboardButton("🔗 Unirse a canal 2", url=f"https://t.me/{CHANNELS['canal_2'][1:]}")],
+                                [
+                                    InlineKeyboardButton(
+                                        "🔗 Unirse a canal 1", url=f"https://t.me/{CHANNELS['canal_1'][1:]}"
+                                    )
+                                ],
+                                [
+                                    InlineKeyboardButton(
+                                        "🔗 Unirse a canal 2", url=f"https://t.me/{CHANNELS['canal_2'][1:]}"
+                                    )
+                                ],
                                 [InlineKeyboardButton("✅ Verificar suscripción", callback_data="verify")],
                             ]
                         ),
@@ -385,16 +411,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-    # Manejo del start link para series (mostrar capítulos o enviar capítulo directo)
+    # MODIFICADO: Manejo del start link para series (mostrar capítulos o enviar capítulo directo)
     elif args and args[0].startswith("serie_"):
-        serie_id_full = args[0].split("_", 1)[1]
-        serie_id_only = serie_id_full.split('_cap_')[0]
+        serie_id_full = args[0].split("_", 1)[1] # serie_ID o serie_ID_cap_INDEX
+        serie_id_only = serie_id_full.split('_cap_')[0] # Extrae solo el ID de la serie
         serie = series_data.get(serie_id_only)
 
         if not serie:
             await update.message.reply_text("❌ Serie no encontrada.")
             return
 
+        # Verifica suscripción a canales (se mantiene para series)
         for name, username in CHANNELS.items():
             try:
                 member = await context.bot.get_chat_member(chat_id=username, user_id=user_id)
@@ -403,8 +430,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         "🔒 Para ver este contenido debes unirte a los canales.",
                         reply_markup=InlineKeyboardMarkup(
                             [
-                                [InlineKeyboardButton("🔗 Unirse a canal 1", url=f"https://t.me/{CHANNELS['canal_1'][1:]}")],
-                                [InlineKeyboardButton("🔗 Unirse a canal 2", url=f"https://t.me/{CHANNELS['canal_2'][1:]}")],
+                                [
+                                    InlineKeyboardButton(
+                                        "🔗 Unirse a canal 1", url=f"https://t.me/{CHANNELS['canal_1'][1:]}"
+                                    )
+                                ],
+                                [
+                                    InlineKeyboardButton(
+                                        "🔗 Unirse a canal 2", url=f"https://t.me/{CHANNELS['canal_2'][1:]}"
+                                    )
+                                ],
                                 [InlineKeyboardButton("✅ Verificar suscripción", callback_data="verify")],
                             ]
                         ),
@@ -415,7 +450,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("❌ Error al verificar canales. Intenta más tarde.")
                 return
 
-        if not can_view_video(user_id):
+        # APLICACIÓN DE LA SEGURIDAD PARA SERIES AQUÍ
+        if not can_view_video(user_id): # Verifica si tiene vistas disponibles
             await update.message.reply_text(
                 f"🚫 Has alcanzado tu límite diario de {FREE_LIMIT_VIDEOS} vistas para series/videos.\n"
                 "💎 Por favor, considera comprar un plan para acceso ilimitado.",
@@ -423,6 +459,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
+        # Si el argumento tiene el formato 'serie_ID_cap_INDEX', reproduce directamente el capítulo
         if '_cap_' in serie_id_full:
             parts = serie_id_full.split('_cap_')
             serie_id = parts[0]
@@ -433,9 +470,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("❌ Capítulo no disponible.")
                 return
             
-            await register_view(user_id)
+            await register_view(user_id) # Registra la vista al reproducir el capítulo
             video_id = capitulos[cap_index]
 
+            # Botones de navegación para capítulos
             botones = []
             if cap_index > 0:
                 prev_deep_link = f"https://t.me/{bot_username}?start=serie_{serie_id}_cap_{cap_index - 1}"
@@ -444,6 +482,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 next_deep_link = f"https://t.me/{bot_username}?start=serie_{serie_id}_cap_{cap_index + 1}"
                 botones.append(InlineKeyboardButton("➡️ Siguiente", url=next_deep_link))
             
+            # Botón "Volver a la Serie" que regresará a la lista de capítulos (usando deep link)
             list_deep_link = f"https://t.me/{bot_username}?start=serie_{serie_id}"
             botones.append(InlineKeyboardButton("🔙 Volver a la Serie", url=list_deep_link))
 
@@ -456,23 +495,27 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 protect_content=not can_resend_content(user_id),
                 parse_mode="Markdown"
             )
-            return
+            return # Termina la ejecución aquí si se reproduce un capítulo
 
+        # Si solo es 'serie_ID', muestra la lista de capítulos (como se hacía antes)
         capitulos = serie.get("capitulos", [])
         if not capitulos:
             await update.message.reply_text("❌ Esta serie no tiene capítulos disponibles aún.")
             return
         
+        # Usar la nueva función para generar los botones de los capítulos
         markup_chapters = await generate_chapter_buttons(serie_id_only, len(capitulos), bot_username)
 
+        # MODIFICADO: El botón para la serie ahora es un deep link del bot
         serie_deep_link = f"https://t.me/{bot_username}?start=serie_{serie_id_only}"
         
+        # Combina el botón de la URL de la serie con los botones de capítulos
         combined_markup = InlineKeyboardMarkup(
             [
                 [
                     InlineKeyboardButton(serie_deep_link, url=serie_deep_link)
                 ],
-                *markup_chapters.inline_keyboard
+                *markup_chapters.inline_keyboard # Agrega los botones de los capítulos generados
             ]
         )
 
@@ -496,6 +539,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ]
             ),
         )
+
 
 async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -521,6 +565,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = query.from_user
     user_id = user.id
     data = query.data
+    # No necesitamos bot_username aquí, ya que los deep links se manejan en `start`
 
     if data == "planes":
         texto_planes = (
@@ -599,8 +644,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("💬 Aquí puedes hacer tu pedido en el chat.")
     elif data == "cursos":
         await query.message.reply_text("🎓 Aquí estarán los cursos disponibles.")
+
+    # REMOVIDO: El manejo de play_video_ y cap_ se ha movido al handler 'start'
+    # ya que ahora los botones generan deep links que usan el comando /start.
+    # Los únicos callbacks que se siguen manejando aquí son los del menú principal y pagos.
     
-    # Callback para mostrar la lista de capítulos de una serie
+    # NUEVO: Callback para mostrar la lista de capítulos de una serie cuando se usa "Volver a la Serie"
     elif data.startswith("serie_list_"):
         serie_id = data.split("_")[2]
         serie = series_data.get(serie_id)
@@ -608,7 +657,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("❌ Serie no encontrada.")
             return
         
-        if not can_view_video(user_id):
+        # APLICACIÓN DE LA SEGURIDAD PARA SERIES AQUÍ (al volver a la lista)
+        if not can_view_video(user_id): # Verifica si tiene vistas disponibles
             await query.message.reply_text(
                 f"🚫 Has alcanzado tu límite diario de {FREE_LIMIT_VIDEOS} vistas para series/videos.\n"
                 "💎 Por favor, considera comprar un plan para acceso ilimitado.",
@@ -621,9 +671,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("❌ Esta serie no tiene capítulos disponibles aún.")
             return
         
+        # Reutilizar la función para generar los botones de los capítulos
         bot_username = (await context.bot.get_me()).username
         markup = await generate_chapter_buttons(serie_id, len(capitulos), bot_username)
 
+        # Editar el mensaje para mostrar la lista de capítulos
         await query.edit_message_media(
             media=InputMediaPhoto(
                 media=serie["photo_id"],
@@ -633,34 +685,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=markup,
         )
 
-# --- Nuevo manejador para cuando el bot es añadido o removido de un chat ---
-async def my_chat_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat = update.effective_chat
-    my_member = update.my_chat_member
 
-    # Si el bot es añadido a un chat (grupo o canal)
-    if my_member.new_chat_member.status == "member" or my_member.new_chat_member.status == "administrator":
-        if chat.id not in known_chats:
-            known_chats.add(chat.id)
-            save_known_chats_firestore() # Guardar el chat_id en Firestore
-            logger.info(f"✅ Bot añadido al chat/canal: {chat.title} (ID: {chat.id}). ID guardado.")
-            # Puedes enviar un mensaje de bienvenida al canal/grupo si lo deseas
-            # await context.bot.send_message(chat_id=chat.id, text="¡Hola! Gracias por añadirme. 😊")
-    
-    # Si el bot es removido de un chat
-    elif my_member.new_chat_member.status == "left" or my_member.new_chat_member.status == "kicked":
-        if chat.id in known_chats:
-            known_chats.remove(chat.id)
-            save_known_chats_firestore() # Eliminar el chat_id de Firestore
-            logger.info(f"❌ Bot removido del chat/canal: {chat.title} (ID: {chat.id}). ID eliminado.")
-
-# --- Pagos (sin cambios) ---
+# --- Pagos ---
 async def precheckout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.pre_checkout_query.answer(ok=True)
 
 async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     payload = update.message.successful_payment.invoice_payload
+    # MODIFICADO: Guardar el tipo de plan junto con la fecha de expiración
     if payload == PLAN_PRO_ITEM["payload"]:
         expire_at = datetime.now(timezone.utc) + timedelta(days=30)
         user_premium[user_id] = {"expire_at": expire_at, "plan_type": "plan_pro"}
@@ -669,14 +702,14 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
         expire_at = datetime.now(timezone.utc) + timedelta(days=30)
         user_premium[user_id] = {"expire_at": expire_at, "plan_type": "plan_ultra"}
         await update.message.reply_text("🎉 ¡Gracias por tu compra! Tu *Plan Ultra* se activó por 30 días.")
-    save_data()
+    save_data() # Guardar los cambios después de la activación del plan
 
-# --- Webhook (sin cambios) ---
+# --- Webhook ---
 async def webhook_handler(request):
     update = web.json_response(await request.json())
     dp = request.app["dp"]
     async with dp.bot.get_updates_context_manager(update):
-        await dp.process_update(Update.from_json(update, dp.bot)) # Usa from_json
+        await dp.process_update(Update.de_json(update, dp.bot))
     return web.Response()
 
 async def setup_webhook(app: Application):
@@ -698,23 +731,22 @@ def main():
     application.add_handler(CallbackQueryHandler(handle_callback))
     application.add_handler(PreCheckoutQueryHandler(precheckout_handler))
     application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
-    # AÑADIDO: Handler para capturar cuando el bot es añadido/removido de un chat
-    application.add_handler(ChatMemberHandler(my_chat_member_handler, ChatMemberHandler.MY_CHAT_MEMBER))
-
 
     # Iniciar el bot en modo webhook
     if APP_URL:
-        application.updater = None
+        application.updater = None # Deshabilitar polling si usamos webhook
         app_aiohttp = web.Application()
         app_aiohttp["dp"] = application.dispatcher
         app_aiohttp.router.add_post("/telegram", webhook_handler)
         
+        # Registrar funciones de inicio y cierre de AIOHTTP
         application.add_startup_hook(on_startup)
         application.add_shutdown_hook(on_shutdown)
         application.add_startup_hook(setup_webhook)
         
         web.run_app(app_aiohttp, host="0.0.0.0", port=PORT)
     else:
+        # Modo polling para desarrollo local (sin APP_URL)
         print("❌ APP_URL no configurada. Ejecutando en modo polling (solo para desarrollo).")
         application.run_polling(drop_pending_updates=True)
 
