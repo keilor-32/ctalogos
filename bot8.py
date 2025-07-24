@@ -182,14 +182,14 @@ PLAN_PRO_ITEM = {
     "description": "50 videos diarios, sin reenvíos ni compartir.",
     "payload": "plan_pro", # Usado como plan_type
     "currency": "XTR",
-    "prices": [LabeledPrice("Plan Pro por 30 días", 25)],
+    "prices": [LabeledPrice("Plan Pro por 30 días", 1)],
 }
 PLAN_ULTRA_ITEM = {
     "title": "Plan Ultra",
     "description": "Videos y reenvíos ilimitados, sin restricciones.",
     "payload": "plan_ultra", # Usado como plan_type
     "currency": "XTR",
-    "prices": [LabeledPrice("Plan Ultra por 30 días", 50)],
+    "prices": [LabeledPrice("Plan Ultra por 30 días", 1)],
 }
 
 # --- Control acceso (MODIFICADO) ---
@@ -788,7 +788,7 @@ async def recibir_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"{caption}\n\n"
         f"🎬 *Ver Contenido:*\n"
         f"➡️ [Abrir en el Bot]({direct_url})\n" # Enlace clicable
-        f"`{direct_url}`" # URL copiable
+        # Eliminado: f"`{direct_url}`" # URL copiable
     )
 
     for chat_id in known_chats:
@@ -878,12 +878,12 @@ async def finalizar_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bot_username = (await context.bot.get_me()).username
     direct_url = f"https://t.me/{bot_username}?start=serie_{serie_id}"
     
-    # Formato mejorado para clicable y copiable
+    # Formato mejorado para clicable
     full_caption = (
         f"{serie['caption']}\n\n"
         f"🎬 *Ver Serie Completa:*\n"
         f"➡️ [Abrir en el Bot]({direct_url})\n" # Enlace clicable
-        f"`{direct_url}`" # URL copiable
+        # Eliminado: f"`{direct_url}`" # URL copiable
     )
 
     for chat_id in known_chats:
@@ -975,4 +975,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
- 
