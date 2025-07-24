@@ -4,6 +4,7 @@ import tempfile
 import logging
 import asyncio
 from datetime import datetime, timedelta, timezone
+from aiohttp import web
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -44,8 +45,8 @@ print("✅ Firestore inicializado correctamente.")
 # --- Configuración ---
 TOKEN = os.getenv("TOKEN")
 PROVIDER_TOKEN = os.getenv("PROVIDER_TOKEN", "")
-APP_URL = os.getenv("APP_URL") # This is now the base URL for the webhook
-PORT = int(os.getenv("PORT", "8080")) # Port on which the PTB server will listen
+APP_URL = os.getenv("APP_URL")
+PORT = int(os.getenv("PORT", "8080"))
 
 if not TOKEN:
     raise ValueError("❌ ERROR: La variable de entorno TOKEN no está configurada.")
@@ -369,7 +370,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             [
                                 [
                                     InlineKeyboardButton(
-                                        "🔗 Unirse a canal 1", url=f"https://t.me/{CHANNELS['canal_1'][1:]}"
+                                        "🔗 Unirse a canal 1", url=f"https://t.me/{CHANNELS['canal_1'][1:]}]"
                                     )
                                 ],
                                 [
@@ -734,47 +735,243 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
         expire_at = datetime.now(timezone.utc) + timedelta(days=30)
         user_premium[user_id] = {"expire_at": expire_at, "plan_type": "plan_ultra"}
         await update.message.reply_text("🎉 ¡Gracias por tu compra! Tu *Plan Ultra* se activó por 30 días.")
-    # Si tienes un 'PREMIUM_ITEM' original, asegúrate de manejarlo
-    save_data() # Guardar datos después de un pago exitoso
-
-# Nuevas funciones para manejar el ciclo de vida de la aplicación de PTB
-async def post_init(application: Application):
-    """Función de callback que se ejecuta después de que el bot se inicia y antes de recibir actualizaciones."""
-    load_data()
-    logger.info("Datos cargados al inicio.")
-    # Configura el webhook aquí, DESPUÉS de que los datos se hayan cargado
-    await application.bot.set_webhook(url=f"{APP_URL}/telegram", allowed_updates=Update.ALL_TYPES)
-    logger.info(f"Webhook configurado a: {APP_URL}/telegram")
-
-async def pre_shutdown(application: Application):
-    """Función de callback que se ejecuta antes de que el bot se apague."""
-    # Nota: En ptb v20, el método para registrar esto en ApplicationBuilder es `post_shutdown`.
-    # Sin embargo, tu función interna `pre_shutdown` se llamará en ese punto.
+    # Si tienes un 'PREMIUM_ITEM' original, asegúrate de manejarlo también.
+    # Ejemplo de manejo para el viejo "premium_plan" si aún lo usas:
+    # elif payload == PREMIUM_ITEM["payload"]:
+    #     expire_at = datetime.now(timezone.utc) + timedelta(days=30)
+    #     user_premium[user_id] = {"expire_at": expire_at, "plan_type": "premium_legacy"}
+    #     await update.message.reply_text("🎉 ¡Gracias por tu compra! Tu *Plan Premium* se activó por 30 días.")
+    
     save_data()
-    logger.info("Datos guardados al cerrar.")
 
-def main():
-    # Registra las funciones post_init y pre_shutdown al construir la aplicación
-    application = Application.builder().token(TOKEN).post_init(post_init).post_shutdown(pre_shutdown).build() # <-- CORREGIDO AQUÍ
 
-    # Handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(handle_callback))
-    application.add_handler(PreCheckoutQueryHandler(precheckout_handler))
-    application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
-
-    # Iniciar el bot en modo webhook con el servidor integrado de python-telegram-bot
-    if APP_URL:
-        # La librería se encarga de iniciar el servidor web en el puerto y ruta especificados
-        application.run_webhook(
-            listen="0.0.0.0",
-            port=PORT,
-            url_path="telegram", # La parte final de la URL del webhook (ej: /telegram)
-            webhook_url=f"{APP_URL}/telegram" # La URL completa que Telegram llamará
-        )
+# --- Recepción contenido (sinopsis + video) ---
+async def recibir_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.message
+    user_id = msg.from_user.id
+    if msg.photo and msg.caption:
+        current_photo[user_id] = {
+            "photo_id": msg.photo[-1].file_id,
+            "caption": msg.caption,
+        }
+        await msg.reply_text("✅ Sinopsis recibida. Ahora envía el video o usa /crear_serie para series.")
     else:
-        print("❌ APP_URL no configurada. Ejecutando en modo polling (solo para desarrollo).")
-        application.run_polling(drop_pending_updates=True)
+        await msg.reply_text("❌ Envía una imagen con sinopsis.")
+
+async def recibir_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.message
+    user_id = msg.from_user.id
+    bot_username = (await context.bot.get_me()).username
+
+    if user_id not in current_photo:
+        await msg.reply_text("❌ Primero envía una sinopsis con imagen.")
+        return
+
+    pkg_id = str(int(datetime.utcnow().timestamp()))
+    photo_id = current_photo[user_id]["photo_id"]
+    caption = current_photo[user_id]["caption"]
+    video_id = msg.video.file_id
+
+    content_packages[pkg_id] = {
+        "photo_id": photo_id,
+        "caption": caption,
+        "video_id": video_id,
+    }
+    del current_photo[user_id]
+
+    save_data()
+
+    boton_ver_contenido_en_privado = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "▶️ Ver Contenido", url=f"https://t.me/{bot_username}?start=video_{pkg_id}"
+                )
+            ]
+        ]
+    )
+    for chat_id in known_chats:
+        try:
+            await context.bot.send_photo(
+                chat_id=chat_id,
+                photo=photo_id,
+                caption=caption,
+                reply_markup=boton_ver_contenido_en_privado,
+                protect_content=True, # Siempre protege en el grupo
+            )
+        except Exception as e:
+            logger.warning(f"No se pudo enviar a {chat_id}: {e}")
+
+    await msg.reply_text("✅ Contenido enviado a los grupos.")
+
+# --- Comandos para series (simplificado) ---
+async def crear_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando para iniciar creación de serie (sinopsis + foto)."""
+    user_id = update.message.from_user.id
+    if user_id not in current_photo:
+        await update.message.reply_text("❌ Primero envía la sinopsis con imagen.")
+        return
+    serie_id = str(int(datetime.utcnow().timestamp()))
+    data = current_photo[user_id]
+    current_series[user_id] = {
+        "serie_id": serie_id,
+        "title": data["caption"].split("\n")[0],
+        "photo_id": data["photo_id"],
+        "caption": data["caption"],
+        "capitulos": [],
+    }
+    del current_photo[user_id]
+    await update.message.reply_text(
+        "✅ Serie creada temporalmente.\n"
+        "Ahora envía el primer video para el capítulo 1 usando /agregar_capitulo."
+    )
+
+async def agregar_capitulo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando para agregar capítulo a la serie actual."""
+    user_id = update.message.from_user.id
+    if user_id not in current_series:
+        await update.message.reply_text("❌ No hay serie en creación. Usa /crear_serie primero.")
+        return
+    
+    await update.message.reply_text(
+        "📽️ Por favor envía ahora el video para el capítulo de la serie."
+    )
+
+async def recibir_video_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Para recibir video y asignarlo como capítulo si el usuario está en proceso de agregar capítulo a serie."""
+    msg = update.message
+    user_id = msg.from_user.id
+    if user_id not in current_series:
+        # Si no está creando una serie, se trata como un video regular
+        await recibir_video(update, context)
+        return
+
+    if not msg.video:
+        await msg.reply_text("❌ Envía un video válido para el capítulo.")
+        return
+
+    serie = current_series[user_id]
+    video_id = msg.video.file_id
+    serie["capitulos"].append(video_id)
+
+    await msg.reply_text(f"✅ Capítulo {len(serie['capitulos'])} agregado a la serie. Usa /finalizar_serie para guardar la serie o envía otro video para añadir el siguiente capítulo.")
+
+async def finalizar_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Finaliza y guarda la serie creada en Firestore y memoria."""
+    user_id = update.message.from_user.id
+    if user_id not in current_series:
+        await update.message.reply_text("❌ No hay serie en creación.")
+        return
+    serie = current_series[user_id]
+    serie_id = serie["serie_id"]
+    
+    series_data[serie_id] = {
+        "title": serie["title"],
+        "photo_id": serie["photo_id"],
+        "caption": serie["caption"],
+        "capitulos": serie["capitulos"],
+    }
+    save_data()
+    del current_series[user_id]
+
+    # Enviar a grupos la portada con botón "Ver Serie"
+    bot_username = (await context.bot.get_me()).username
+    boton = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "▶️ Ver Serie",
+                    url=f"https://t.me/{bot_username}?start=serie_{serie_id}",
+                )
+            ]
+        ]
+    )
+    for chat_id in known_chats:
+        try:
+            await context.bot.send_photo(
+                chat_id=chat_id,
+                photo=serie["photo_id"],
+                caption=serie["caption"],
+                reply_markup=boton,
+                protect_content=True, # Siempre protege la publicación en el grupo
+            )
+        except Exception as e:
+            logger.warning(f"No se pudo enviar serie a {chat_id}: {e}")
+
+    await update.message.reply_text("✅ Serie guardada y enviada a los grupos.")
+
+async def detectar_grupo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+    if chat.type in ["group", "supergroup"]:
+        if chat.id not in known_chats:
+            known_chats.add(chat.id)
+            save_data()
+            logger.info(f"Grupo registrado: {chat.id}")
+
+# --- WEBHOOK aiohttp ---
+async def webhook_handler(request):
+    data = await request.json()
+    update = Update.de_json(data, app_telegram.bot)
+    await app_telegram.update_queue.put(update)
+    return web.Response(text="OK")
+
+async def on_startup(app):
+    webhook_url = f"{APP_URL}/webhook"
+    await app_telegram.bot.set_webhook(webhook_url)
+    logger.info(f"Webhook configurado en {webhook_url}")
+
+async def on_shutdown(app):
+    await app_telegram.bot.delete_webhook()
+    logger.info("Webhook eliminado")
+
+# --- App Telegram ---
+app_telegram = Application.builder().token(TOKEN).build()
+
+# Agregar handlers
+app_telegram.add_handler(CommandHandler("start", start))
+app_telegram.add_handler(CallbackQueryHandler(verify, pattern="^verify$"))
+app_telegram.add_handler(CallbackQueryHandler(handle_callback, pattern="^play_video_.*$"))
+app_telegram.add_handler(CallbackQueryHandler(handle_callback))
+app_telegram.add_handler(PreCheckoutQueryHandler(precheckout_handler))
+app_telegram.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
+app_telegram.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, recibir_foto))
+app_telegram.add_handler(MessageHandler(filters.VIDEO & filters.ChatType.PRIVATE, recibir_video_serie))
+app_telegram.add_handler(MessageHandler(filters.ALL & filters.ChatType.GROUPS, detectar_grupo))
+
+# Comandos para series
+app_telegram.add_handler(CommandHandler("crear_serie", crear_serie))
+app_telegram.add_handler(CommandHandler("agregar_capitulo", agregar_capitulo))
+app_telegram.add_handler(CommandHandler("finalizar_serie", finalizar_serie))
+
+# --- Servidor aiohttp ---
+web_app = web.Application()
+web_app.router.add_post("/webhook", webhook_handler)
+web_app.router.add_get("/ping", lambda request: web.Response(text="✅ Bot activo."))
+web_app.on_startup.append(on_startup)
+web_app.on_shutdown.append(on_shutdown)
+
+async def main():
+    load_data()
+    logger.info("🤖 Bot iniciado con webhook")
+
+    await app_telegram.initialize()
+    await app_telegram.start()
+
+    runner = web.AppRunner(web_app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    await site.start()
+    logger.info(f"🌐 Webhook corriendo en puerto {PORT}")
+
+    try:
+        while True:
+            await asyncio.sleep(3600)
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("🛑 Deteniendo bot...")
+    finally:
+        await app_telegram.stop()
+        await app_telegram.shutdown()
+        await runner.cleanup()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
