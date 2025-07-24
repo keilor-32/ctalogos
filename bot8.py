@@ -182,14 +182,14 @@ PLAN_PRO_ITEM = {
     "description": "50 videos diarios, sin reenvíos ni compartir.",
     "payload": "plan_pro", # Usado como plan_type
     "currency": "XTR",
-    "prices": [LabeledPrice("Plan Pro por 30 días", 1)],
+    "prices": [LabeledPrice("Plan Pro por 30 días", 25)],
 }
 PLAN_ULTRA_ITEM = {
     "title": "Plan Ultra",
     "description": "Videos y reenvíos ilimitados, sin restricciones.",
     "payload": "plan_ultra", # Usado como plan_type
     "currency": "XTR",
-    "prices": [LabeledPrice("Plan Ultra por 30 días", 1)],
+    "prices": [LabeledPrice("Plan Ultra por 30 días", 50)],
 }
 
 # --- Control acceso (MODIFICADO) ---
@@ -783,12 +783,11 @@ async def recibir_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     direct_url = f"https://t.me/{bot_username}?start=video_{pkg_id}"
     
-    # Formato mejorado para clicable y copiable
+    # Formato mejorado para clicable
     full_caption = (
         f"{caption}\n\n"
-        f"🎬 *Ver video completo :*\n"
-        f"➡️ [ver contenido 🎥🎥]({direct_url})\n" # Enlace clicable
-        # Eliminado: f"`{direct_url}`" # URL copiable
+        f"🎬 *Ver Contenido:*\n"
+        f"➡️ [Abrir en el Bot]({direct_url})\n" # Enlace clicable
     )
 
     for chat_id in known_chats:
@@ -798,12 +797,12 @@ async def recibir_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 photo=photo_id,
                 caption=full_caption,
                 parse_mode="Markdown",
-                protect_content=False, # MODIFICADO: Cambiado a False
+                protect_content=False,
             )
         except Exception as e:
             logger.warning(f"No se pudo enviar a {chat_id}: {e}")
 
-    await msg.reply_text("✅ Contenido enviado a los grupos con URL directa (clicable y copiable).")
+    await msg.reply_text("✅ Contenido enviado a los grupos.")
 
 # --- Comandos para series (simplificado) ---
 async def crear_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -882,8 +881,7 @@ async def finalizar_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     full_caption = (
         f"{serie['caption']}\n\n"
         f"🎬 *Ver Serie Completa:*\n"
-        f"➡️ [ver serie 📽️📽️]({direct_url})\n" # Enlace clicable
-        # Eliminado: f"`{direct_url}`" # URL copiable
+        f"➡️ [Abrir en el Bot]({direct_url})\n" # Enlace clicable
     )
 
     for chat_id in known_chats:
@@ -893,20 +891,49 @@ async def finalizar_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 photo=serie["photo_id"],
                 caption=full_caption,
                 parse_mode="Markdown",
-                protect_content=False, # MODIFICADO: Cambiado a False
+                protect_content=False,
             )
         except Exception as e:
             logger.warning(f"No se pudo enviar serie a {chat_id}: {e}")
 
-    await update.message.reply_text("✅ Serie guardada y enviada a los grupos con URL directa (clicable y copiable).")
+    await update.message.reply_text("✅ Serie guardada y enviada a los grupos.")
 
-async def detectar_grupo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# MODIFICADO: Función para detectar grupos y canales
+async def detectar_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
+    # Check for group/supergroup messages
     if chat.type in ["group", "supergroup"]:
         if chat.id not in known_chats:
             known_chats.add(chat.id)
             save_data()
             logger.info(f"Grupo registrado: {chat.id}")
+            await update.message.reply_text(f"✅ ¡Este grupo ha sido registrado para envíos! ID: `{chat.id}`", parse_mode="Markdown")
+    # Check for forwarded channel posts or bot added to channel
+    elif update.channel_post: # This catches messages directly from a channel where the bot is admin
+        channel_id = update.channel_post.chat.id
+        if channel_id not in known_chats:
+            known_chats.add(channel_id)
+            save_data()
+            logger.info(f"Canal registrado: {channel_id}")
+            await context.bot.send_message(
+                chat_id=channel_id,
+                text=f"✅ ¡Este canal ha sido registrado para envíos! ID: `{channel_id}`\n\n"
+                     "Asegúrate de que el bot tenga permisos de 'Publicar mensajes' y 'Editar mensajes' en este canal.",
+                parse_mode="Markdown"
+            )
+    elif update.message and update.message.forward_from_chat and update.message.forward_from_chat.type == "channel":
+        channel_id = update.message.forward_from_chat.id
+        if channel_id not in known_chats:
+            known_chats.add(channel_id)
+            save_data()
+            logger.info(f"Canal registrado via forward: {channel_id}")
+            await update.message.reply_text(f"✅ ¡Canal registrado exitosamente! ID: `{channel_id}`\n\n"
+                                             "Asegúrate de que el bot sea administrador con permisos de 'Publicar mensajes' y 'Editar mensajes' en tu canal para que pueda enviar contenido automáticamente.",
+                                             parse_mode="Markdown")
+    else:
+        # If it's a private chat and not a command, ignore, or provide info
+        pass
+
 
 # --- WEBHOOK aiohttp ---
 async def webhook_handler(request):
@@ -936,7 +963,9 @@ app_telegram.add_handler(PreCheckoutQueryHandler(precheckout_handler))
 app_telegram.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
 app_telegram.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, recibir_foto))
 app_telegram.add_handler(MessageHandler(filters.VIDEO & filters.ChatType.PRIVATE, recibir_video_serie))
-app_telegram.add_handler(MessageHandler(filters.ALL & filters.ChatType.GROUPS, detectar_grupo))
+# MODIFICADO: Usar la función detectar_chat para todos los tipos de chat
+app_telegram.add_handler(MessageHandler(filters.ALL & (filters.ChatType.GROUPS | filters.ChatType.CHANNELS), detectar_chat))
+app_telegram.add_handler(MessageHandler(filters.FORWARDED & filters.ChatType.PRIVATE, detectar_chat)) # Handle forwarded messages in private chat
 
 # Comandos para series
 app_telegram.add_handler(CommandHandler("crear_serie", crear_serie))
