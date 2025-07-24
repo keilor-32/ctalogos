@@ -786,8 +786,8 @@ async def recibir_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Formato mejorado para clicable y copiable
     full_caption = (
         f"{caption}\n\n"
-        f"🎬 *Ver Contenido:*\n"
-        f"➡️ [Abrir en el Bot]({direct_url})\n" # Enlace clicable
+        f"🎬 *Ver video completo :*\n"
+        f"➡️ [ver contenido 🎥🎥]({direct_url})\n" # Enlace clicable
         # Eliminado: f"`{direct_url}`" # URL copiable
     )
 
@@ -882,7 +882,7 @@ async def finalizar_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     full_caption = (
         f"{serie['caption']}\n\n"
         f"🎬 *Ver Serie Completa:*\n"
-        f"➡️ [Abrir en el Bot]({direct_url})\n" # Enlace clicable
+        f"➡️ [ver serie 📽️📽️]({direct_url})\n" # Enlace clicable
         # Eliminado: f"`{direct_url}`" # URL copiable
     )
 
