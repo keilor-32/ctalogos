@@ -175,7 +175,7 @@ def load_data():
     series_data = load_series_firestore()
 
 # --- Planes ---
-FREE_LIMIT_VIDEOS = 70
+FREE_LIMIT_VIDEOS = 3
 PRO_LIMIT_VIDEOS = 50
 PLAN_PRO_ITEM = {
     "title": "Plan Pro",
@@ -631,7 +631,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         parse_mode="Markdown"
                     ),
                     reply_markup=markup,
-                    protect_content=protect_content_status # <--- ¡AHORA VA AQUÍ!
+                    protect_content=protect_content_status 
                 )
                 logger.info(f"Capítulo {index + 1} de serie {serie_id} enviado/editado exitosamente.")
             except Exception as e:
@@ -702,12 +702,6 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
         expire_at = datetime.now(timezone.utc) + timedelta(days=30)
         user_premium[user_id] = {"expire_at": expire_at, "plan_type": "plan_ultra"}
         await update.message.reply_text("🎉 ¡Gracias por tu compra! Tu *Plan Ultra* se activó por 30 días.")
-    # Si tienes un 'PREMIUM_ITEM' original, asegúrate de manejarlo también.
-    # Ejemplo de manejo para el viejo "premium_plan" si aún lo usas:
-    # elif payload == PREMIUM_ITEM["payload"]:
-    #     expire_at = datetime.now(timezone.utc) + timedelta(days=30)
-    #     user_premium[user_id] = {"expire_at": expire_at, "plan_type": "premium_legacy"}
-    #     await update.message.reply_text("🎉 ¡Gracias por tu compra! Tu *Plan Premium* se activó por 30 días.")
     
     save_data()
 
