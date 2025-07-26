@@ -290,12 +290,45 @@ def generate_chapter_buttons(serie_id, num_chapters, chapters_per_row=5):
     buttons.append([InlineKeyboardButton("🔙 Volver al menú principal", callback_data="menu_principal")])
     return InlineKeyboardMarkup(buttons)
 
+# --- Función auxiliar para verificar suscripción a canales ---
+async def check_channel_subscription(user_id, context: ContextTypes.DEFAULT_TYPE):
+    not_joined = []
+    for name, username in CHANNELS.items():
+        try:
+            member = await context.bot.get_chat_member(chat_id=username, user_id=user_id)
+            if member.status not in ["member", "administrator", "creator"]:
+                not_joined.append(username)
+        except Exception as e:
+            logger.warning(f"Error verificando canal {username} para user {user_id}: {e}")
+            not_joined.append(username) # Asumir no unido si hay error
+    return not_joined
+
 # --- Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     user_id = update.effective_user.id
     bot_username = (await context.bot.get_me()).username
 
+    # Verificar suscripción a canales al inicio
+    not_joined_channels = await check_channel_subscription(user_id, context)
+
+    # Si el usuario NO está unido a todos los canales, pedir verificación
+    if not_joined_channels:
+        await update.message.reply_text(
+            "👋 ¡Hola! Primero debes unirte a todos nuestros canales para usar este bot. Una vez te hayas unido, haz clic en 'Verificar suscripción' para continuar.",
+            reply_markup=InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton("🔗 Unirse a canal 1", url=f"https://t.me/{CHANNELS['canal_1'][1:]}"),
+                        InlineKeyboardButton("🔗 Unirse a canal 2", url=f"https://t.me/{CHANNELS['canal_2'][1:]}"),
+                    ],
+                    [InlineKeyboardButton("✅ Verificar suscripción", callback_data="verify")],
+                ]
+            ),
+        )
+        return # Salir de la función si no está verificado
+
+    # Si el usuario YA está unido a todos los canales, proceder con la lógica normal o menú principal
     # Manejo del start link para mostrar sinopsis + botón "Ver Video" (Videos individuales)
     if args and args[0].startswith("video_"):
         pkg_id = args[0].split("_")[1]
@@ -303,35 +336,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not pkg:
             await update.message.reply_text("❌ Contenido no disponible.")
             return
-
-        # Verifica suscripción a canales
-        for name, username in CHANNELS.items():
-            try:
-                member = await context.bot.get_chat_member(chat_id=username, user_id=user_id)
-                if member.status not in ["member", "administrator", "creator"]:
-                    await update.message.reply_text(
-                        "🔒 Para ver este contenido debes unirte a los canales.",
-                        reply_markup=InlineKeyboardMarkup(
-                            [
-                                [
-                                    InlineKeyboardButton(
-                                        "🔗 Unirse a canal 1", url=f"https://t.me/{CHANNELS['canal_1'][1:]}"
-                                    )
-                                ],
-                                [
-                                    InlineKeyboardButton(
-                                        "🔗 Unirse a canal 2", url=f"https://t.me/{CHANNELS['canal_2'][1:]}"
-                                    )
-                                ],
-                                [InlineKeyboardButton("✅ Verificar suscripción", callback_data="verify")],
-                            ]
-                        ),
-                    )
-                    return
-            except Exception as e:
-                logger.warning(f"Error verificando canal: {e}")
-                await update.message.reply_text("❌ Error al verificar canales. Intenta más tarde.")
-                return
 
         # Mostrar sinopsis y botón "Ver Video"
         ver_video_button = InlineKeyboardMarkup(
@@ -358,36 +362,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Video no disponible.")
             return
 
-        # La verificación de canales ya se hizo en el paso 'video_' anterior,
-        # pero para mayor seguridad o si el usuario llegó directamente aquí, se puede repetir.
-        for name, username in CHANNELS.items():
-            try:
-                member = await context.bot.get_chat_member(chat_id=username, user_id=user_id)
-                if member.status not in ["member", "administrator", "creator"]:
-                    await update.message.reply_text(
-                        "🔒 saludos debes unirte a todos nuestros canales para asi poder usar este bot una ves te hayas unido debes dar click en verificar suscripcion para con tinuar.",
-                        reply_markup=InlineKeyboardMarkup(
-                            [
-                                [
-                                    InlineKeyboardButton(
-                                        "🔗 Unirse a canal 1", url=f"https://t.me/{CHANNELS['canal_1'][1:]}]"
-                                    )
-                                ],
-                                [
-                                    InlineKeyboardButton(
-                                        "🔗 Unirse a canal 2", url=f"https://t.me/{CHANNELS['canal_2'][1:]}"
-                                    )
-                                ],
-                                [InlineKeyboardButton("✅ Verificar suscripción", callback_data="verify")],
-                            ]
-                        ),
-                    )
-                    return
-            except Exception as e:
-                logger.warning(f"Error verificando canal: {e}")
-                await update.message.reply_text("❌ Error al verificar canales. Intenta más tarde.")
-                return
-
         if can_view_video(user_id):
             await register_view(user_id)
             title_caption = pkg.get("caption", "🎬 Aquí tienes el video completo.")
@@ -411,35 +385,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not serie:
             await update.message.reply_text("❌ Serie no encontrada.")
             return
-
-        # Verifica suscripción a canales (se mantiene para series)
-        for name, username in CHANNELS.items():
-            try:
-                member = await context.bot.get_chat_member(chat_id=username, user_id=user_id)
-                if member.status not in ["member", "administrator", "creator"]:
-                    await update.message.reply_text(
-                        "🔒 Para ver este contenido debes unirte a los canales.",
-                        reply_markup=InlineKeyboardMarkup(
-                            [
-                                [
-                                    InlineKeyboardButton(
-                                        "🔗 Unirse a canal 1", url=f"https://t.me/{CHANNELS['canal_1'][1:]}"
-                                    )
-                                ],
-                                [
-                                    InlineKeyboardButton(
-                                        "🔗 Unirse a canal 2", url=f"https://t.me/{CHANNELS['canal_2'][1:]}"
-                                    )
-                                ],
-                                [InlineKeyboardButton("✅ Verificar suscripción", callback_data="verify")],
-                            ]
-                        ),
-                    )
-                    return
-            except Exception as e:
-                logger.warning(f"Error verificando canal: {e}")
-                await update.message.reply_text("❌ Error al verificar canales. Intenta más tarde.")
-                return
 
         # APLICACIÓN DE LA SEGURIDAD PARA SERIES AQUÍ
         if not can_view_video(user_id): # Verifica si tiene vistas disponibles
@@ -466,31 +411,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
     else:
-        await update.message.reply_text(
-            "👋 ¡Hola! primero debes unirte a todos nuestros canales para usar este bot una ves te hayas unido haz click en verificar suscripcion para continuar.",
-            reply_markup=InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton("🔗 Unirse a canal 1", url=f"https://t.me/{CHANNELS['canal_1'][1:]}"),
-                        InlineKeyboardButton("🔗 Unirse a canal 2", url=f"https://t.me/{CHANNELS['canal_2'][1:]}"),
-                    ],
-                    [InlineKeyboardButton("✅ Verificar suscripción", callback_data="verify")],
-                ]
-            ),
-        )
+        # Si no hay argumentos específicos y el usuario ya está verificado, mostrar menú principal
+        await update.message.reply_text("📋 Menú principal:", reply_markup=get_main_menu())
+
 
 async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
-    not_joined = []
-    for name, username in CHANNELS.items():
-        try:
-            member = await context.bot.get_chat_member(chat_id=username, user_id=user_id)
-            if member.status not in ["member", "administrator", "creator"]:
-                not_joined.append(username)
-        except Exception:
-            not_joined.append(username)
+    
+    not_joined = await check_channel_subscription(user_id, context)
+
     if not not_joined:
         await query.edit_message_text("✅ Verificación completada. Menú disponible:")
         await query.message.reply_text("📋 Menú principal:", reply_markup=get_main_menu())
@@ -591,33 +522,27 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         # Verificación de seguridad (similar a 'start' handler)
-        for name, username in CHANNELS.items():
-            try:
-                member = await context.bot.get_chat_member(chat_id=username, user_id=user_id)
-                if member.status not in ["member", "administrator", "creator"]:
-                    await query.message.reply_text(
-                        "🔒 Para ver este contenido debes unirte a los canales.",
-                        reply_markup=InlineKeyboardMarkup(
-                            [
-                                [
-                                    InlineKeyboardButton(
-                                        "🔗 Unirse a canal 1", url=f"https://t.me/{CHANNELS['canal_1'][1:]}"
-                                    )
-                                ],
-                                [
-                                    InlineKeyboardButton(
-                                        "🔗 Unirse a canal 2", url=f"https://t.me/{CHANNELS['canal_2'][1:]}"
-                                    )
-                                ],
-                                [InlineKeyboardButton("✅ Verificar suscripción", callback_data="verify")],
-                            ]
-                        ),
-                    )
-                    return
-            except Exception as e:
-                logger.warning(f"Error verificando canal: {e}")
-                await query.message.reply_text("❌ Error al verificar canales. Intenta más tarde.")
-                return
+        not_joined_channels = await check_channel_subscription(user_id, context)
+        if not_joined_channels:
+            await query.message.reply_text(
+                "🔒 Para ver este contenido debes unirte a los canales.",
+                reply_markup=InlineKeyboardMarkup(
+                    [
+                        [
+                            InlineKeyboardButton(
+                                "🔗 Unirse a canal 1", url=f"https://t.me/{CHANNELS['canal_1'][1:]}"
+                            )
+                        ],
+                        [
+                            InlineKeyboardButton(
+                                "🔗 Unirse a canal 2", url=f"https://t.me/{CHANNELS['canal_2'][1:]}"
+                            )
+                        ],
+                        [InlineKeyboardButton("✅ Verificar suscripción", callback_data="verify")],
+                    ]
+                ),
+            )
+            return
 
         if can_view_video(user_id):
             await register_view(user_id)
@@ -786,8 +711,8 @@ async def recibir_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Formato mejorado para clicable
     full_caption = (
         f"{caption}\n\n"
-        f"🎬 *Ver Contenido:*\n"
-        f"➡️ [Abrir en el Bot]({direct_url})\n" # Enlace clicable
+        f"🎬 *haga click aqui:👇*\n"
+        f"➡️ [ver contenido ]({direct_url})\n" # Enlace clicable
     )
 
     for chat_id in known_chats:
@@ -880,8 +805,8 @@ async def finalizar_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Formato mejorado para clicable
     full_caption = (
         f"{serie['caption']}\n\n"
-        f"🎬 *Ver Serie Completa:*\n"
-        f"➡️ [Abrir en el Bot]({direct_url})\n" # Enlace clicable
+        f"🎬 *haga click aqui:👇*\n"
+        f"➡️ [ver contenido ]({direct_url})\n" # Enlace clicable
     )
 
     for chat_id in known_chats:
@@ -1004,3 +929,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
