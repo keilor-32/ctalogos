@@ -175,7 +175,7 @@ def load_data():
     series_data = load_series_firestore()
 
 # --- Planes ---
-FREE_LIMIT_VIDEOS = 3
+FREE_LIMIT_VIDEOS = 70
 PRO_LIMIT_VIDEOS = 50
 PLAN_PRO_ITEM = {
     "title": "Plan Pro",
@@ -613,7 +613,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 media=InputMediaVideo(
                     media=video_id,
                     caption=f"{serie['title']} - Capítulo {index+1}",
-                    parse_mode="Markdown"
+                    parse_mode="Markdown",
+                    protect_content=not can_resend_content(user_id) # <--- ¡CAMBIO APLICADO AQUÍ!
                 ),
                 reply_markup=markup,
             )
