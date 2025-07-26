@@ -175,7 +175,7 @@ def load_data():
     series_data = load_series_firestore()
 
 # --- Planes ---
-FREE_LIMIT_VIDEOS = 70
+FREE_LIMIT_VIDEOS = 80
 PRO_LIMIT_VIDEOS = 50
 PLAN_PRO_ITEM = {
     "title": "Plan Pro",
@@ -382,12 +382,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif args and args[0].startswith("serie_"):
         serie_id = args[0].split("_", 1)[1]
         serie = series_data.get(serie_id)
+        logger.info(f"Usuario {user_id} intentando acceder a serie {serie_id}.")
         if not serie:
-            await update.message.reply_text("❌ Serie no encontrada.")
+            logger.error(f"Serie {serie_id} no encontrada en series_data.")
+            await update.message.reply_text("❌ Serie no encontrada o datos corruptos.")
             return
-
+        
         # APLICACIÓN DE LA SEGURIDAD PARA SERIES AQUÍ
         if not can_view_video(user_id): # Verifica si tiene vistas disponibles
+            logger.info(f"Usuario {user_id} sin vistas para serie {serie_id}. Plan: {get_user_plan_type(user_id)}")
             await update.message.reply_text(
                 f"🚫 Has alcanzado tu límite diario de {FREE_LIMIT_VIDEOS} vistas para series/videos.\n"
                 "💎 Por favor, considera comprar un plan para acceso ilimitado.",
@@ -397,7 +400,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Si puede ver, mostrar capítulos
         capitulos = serie.get("capitulos", [])
+        logger.info(f"Serie {serie_id} tiene {len(capitulos)} capítulos.")
         if not capitulos:
+            logger.warning(f"Serie {serie_id} tiene 0 capítulos en la lista. Datos: {serie}")
             await update.message.reply_text("❌ Esta serie no tiene capítulos disponibles aún.")
             return
         
@@ -583,20 +588,26 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         index = int(index)
         serie = series_data.get(serie_id)
         
+        logger.info(f"Usuario {user_id} intentando ver capítulo {index + 1} de serie {serie_id}.")
+
         if not serie or "capitulos" not in serie:
+            logger.error(f"Serie {serie_id} o capítulos no disponibles para el usuario {user_id}.")
             await query.message.reply_text("❌ Serie o capítulos no disponibles.")
             return
 
         capitulos = serie["capitulos"]
         total = len(capitulos)
         if index < 0 or index >= total:
+            logger.warning(f"Capítulo {index} fuera de rango para serie {serie_id} (total: {total}).")
             await query.message.reply_text("❌ Capítulo fuera de rango.")
             return
 
         # APLICACIÓN DE LA SEGURIDAD PARA CAPÍTULOS DE SERIES AQUÍ
         if can_view_video(user_id): # Verifica si tiene vistas disponibles
+            logger.info(f"Usuario {user_id} puede ver el capítulo. Registrando vista.")
             await register_view(user_id) # Registra la vista
             video_id = capitulos[index]
+            logger.info(f"ID de video para capítulo {index + 1}: {video_id}")
 
             botones = []
             if index > 0:
@@ -605,20 +616,29 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 botones.append(InlineKeyboardButton("➡️ Siguiente", callback_data=f"cap_{serie_id}_{index + 1}"))
             
             # Botón "Volver a la Serie" que regresará a la lista de capítulos
-            botones.append(InlineKeyboardButton("🔙 Volver a la Serie", callback_data=f"serie_list_{serie_id}")) # Nuevo callback para listar capítulos
+            botones.append(InlineKeyboardButton("🔙 Volver a la Serie", callback_data=f"serie_list_{serie_id}"))
 
             markup = InlineKeyboardMarkup([botones])
+            
+            protect_content_status = not can_resend_content(user_id)
+            logger.info(f"Protect content para capítulo {index + 1}: {protect_content_status}")
 
-            await query.edit_message_media(
-                media=InputMediaVideo(
-                    media=video_id,
-                    caption=f"{serie['title']} - Capítulo {index+1}",
-                    parse_mode="Markdown",
-                    protect_content=not can_resend_content(user_id) # <--- ¡CAMBIO APLICADO AQUÍ!
-                ),
-                reply_markup=markup,
-            )
+            try:
+                await query.edit_message_media(
+                    media=InputMediaVideo(
+                        media=video_id,
+                        caption=f"📺 *{serie['title']}* - Capítulo {index+1}",
+                        parse_mode="Markdown"
+                    ),
+                    reply_markup=markup,
+                    protect_content=protect_content_status # <--- ¡AHORA VA AQUÍ!
+                )
+                logger.info(f"Capítulo {index + 1} de serie {serie_id} enviado/editado exitosamente.")
+            except Exception as e:
+                logger.error(f"Error al enviar/editar capítulo {index + 1} de serie {serie_id}: {e}")
+                await query.message.reply_text(f"❌ Error al cargar el video del capítulo. Por favor, inténtalo de nuevo. ({e})")
         else:
+            logger.info(f"Usuario {user_id} ha alcanzado el límite de vistas para ver capítulo {index + 1}.")
             await query.answer("🚫 Has alcanzado tu límite diario de videos. Compra un plan para más acceso.", show_alert=True)
             await query.message.reply_text(
                 f"🚫 Has alcanzado tu límite diario de {FREE_LIMIT_VIDEOS} videos.\n"
@@ -630,12 +650,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("serie_list_"):
         serie_id = data.split("_")[2]
         serie = series_data.get(serie_id)
+        logger.info(f"Usuario {user_id} solicitando lista de capítulos para serie {serie_id}.")
         if not serie:
+            logger.error(f"Serie {serie_id} no encontrada en series_data al pedir lista.")
             await query.message.reply_text("❌ Serie no encontrada.")
             return
         
         # APLICACIÓN DE LA SEGURIDAD PARA SERIES AQUÍ (al volver a la lista)
         if not can_view_video(user_id): # Verifica si tiene vistas disponibles
+            logger.info(f"Usuario {user_id} sin vistas para serie {serie_id} al pedir lista. Plan: {get_user_plan_type(user_id)}")
             await query.message.reply_text(
                 f"🚫 Has alcanzado tu límite diario de {FREE_LIMIT_VIDEOS} vistas para series/videos.\n"
                 "💎 Por favor, considera comprar un plan para acceso ilimitado.",
@@ -644,7 +667,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         capitulos = serie.get("capitulos", [])
+        logger.info(f"Serie {serie_id} tiene {len(capitulos)} capítulos al pedir lista.")
         if not capitulos:
+            logger.warning(f"Serie {serie_id} tiene 0 capítulos en la lista al pedir lista. Datos: {serie}")
             await query.message.reply_text("❌ Esta serie no tiene capítulos disponibles aún.")
             return
         
